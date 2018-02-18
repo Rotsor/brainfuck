@@ -1,4 +1,7 @@
 def byte := fin 256
+instance : has_add(byte) := ⟨fin.add⟩
+instance : has_one(byte) := ⟨(1 : fin 256)⟩
+instance : has_zero(byte) := ⟨(0 : fin 256)⟩
 
 -- AST
 inductive brainfuck : Type
@@ -34,6 +37,119 @@ def decrement_byte : byte -> byte :=
   fin.add 255
 
 def zero_byte : byte := (0 : fin 256)
+
+universes u v w
+
+structure lift2 (α : Sort u) : Sort (u + 1) :=
+mk :: (fst : α)
+
+
+namespace relational
+  
+  namespace in_out_mixed_up
+    inductive effect : Type
+    | input : char → effect
+    | output : char → effect
+
+    structure process : Type 1 := 
+      (state : Type)
+      (initial_state : state)
+      (valid_transition : state → effect → state → Prop)
+
+    def trace := list effect
+
+    inductive is_valid_trace_between (p : process) : trace → p.state → p.state → Prop
+    | empty {} : ∀ s, is_valid_trace_between [] s s
+    | step : ∀ {s1 s2 s3 e rest}, p.valid_transition s1 e s2 → is_valid_trace_between rest s2 s3 → is_valid_trace_between (e :: rest) s1 s3
+
+    inductive valid_trace_between (p : process) : p.state → p.state → Prop
+    | empty {} : ∀ s, valid_trace_between s s
+    | step : ∀ {s1 s2 s3 e}, p.valid_transition s1 e s2 → valid_trace_between s2 s3 → valid_trace_between s1 s3
+
+    def compose_valid_trace {p : process} : ∀ {s1 s2 s3 : p.state}, valid_trace_between p s1 s2 → valid_trace_between p s2 s3 → valid_trace_between p s1 s3
+    | ._ _ _ (valid_trace_between.step transition rest) x := valid_trace_between.step transition (compose_valid_trace rest x)
+    | ._ _ _ (valid_trace_between.empty _) x := x
+
+    def valid_trace_compose {p : process} {t1 t2 : trace} {s1 s2 s3 : p.state} : is_valid_trace_between p t1 s1 s2 → is_valid_trace_between p t2 s2 s3 → is_valid_trace_between p (t1 ++ t2) s1 s2
+
+    def is_valid_trace_from (p : process) (t : trace) (s : p.state) : Prop :=
+      ∃ (final_state : p.state), is_valid_trace_between p t s final_state
+
+    def is_valid_trace (p : process) (t : trace) : Prop :=
+      is_valid_trace_from p t p.initial_state
+
+    def process_equivalent (p1 : process) (p2 : process) : Prop :=
+      ∀ t, is_valid_trace p1 t ↔ is_valid_trace p2 t
+
+    structure process_equivalence (p1 : process) (p2 : process) : Type :=
+      (related : p1.state → p2.state → Prop)
+      (initial_states_related :  related p1.initial_state p2.initial_state) 
+      (transitions1 : ∀ s1 s2, related s1 s2 → ∀ e d1, p1.valid_transition s1 e d1 → ∃ d2, related d1 d2 ∧ p2.valid_transition s2 e d2)
+      (transitions2 : ∀ s1 s2, related s1 s2 → ∀ e d2, p2.valid_transition s2 e d2 → ∃ d1, related d1 d2 ∧ p1.valid_transition s1 e d1)
+
+    def is_reachable (p : process) (s : p.state) : Prop :=
+      ∃ (t : trace), is_valid_trace_between p t p.initial_state s
+
+    def and3_intro {A B C : Prop} (a : A) (b : B) (c : C) : A ∧ B ∧ C :=
+      and.intro a (and.intro b c)
+
+    lemma singleton_trace_to_one_valid_transition {p : process} {s d : p.state} : ∀ {e}, is_valid_trace_between p [e] s d → (p.valid_transition s e d)
+    | _ (is_valid_trace_between.step valid (is_valid_trace_between.empty _)) := valid
+
+    lemma lemma1 (p1 p2 : process) (equivalent : process_equivalent p1 p2) : process_equivalence p1 p2 :=
+      { 
+        related := λ s1 s2
+          , is_reachable p1 s1 ∧
+            is_reachable p2 s2 ∧
+            (∀ t, 
+            is_valid_trace_from p1 t s1 ↔
+            is_valid_trace_from p2 t s2) ,
+        initial_states_related := 
+          and3_intro
+            (Exists.intro [] (is_valid_trace_between.empty _))
+            (Exists.intro [] (is_valid_trace_between.empty _))
+            equivalent
+          ,
+        transitions1 :=
+          λ s1 s2 s1_s2_related, λ e d1 s1_e_d1_valid,
+            let s1_reachable := s1_s2_related.left in
+            let s2_reachable := s1_s2_related.right.left in
+            let related := s1_s2_related.right.right in
+            let small_trace := [e] in
+            let s1_to_d1 := (is_valid_trace_between.step s1_e_d1_valid (is_valid_trace_between.empty _)) in
+            let small_trace_valid1 := Exists.intro d1 s1_to_d1 in
+            let small_trace_valid2 := (related [e]).mp small_trace_valid1 in
+            exists.elim small_trace_valid2 (λ d2 s2_to_d2, Exists.intro d2 (
+              and.intro
+                (and3_intro
+                  _
+                  _
+                  _)
+                (singleton_trace_to_one_valid_transition d2_good)
+            ))
+      }
+    
+
+    def process_equivalent (p1 : process) (p2 : process) : Prop :=
+      ∃ , (process_equivalent' p1 p2 related)
+
+    def process_leq (p1 : process) (p2 : process) : Prop :=
+      ∃ (related : p1.state → p2.state → Prop), (process_equivalent' p1 p2 related)
+  end in_out_mixed_up
+
+  def process : Type 1 :=
+    Σ (active_state : Type), 
+    (Σ (waiting_state : Type), 
+      -- out transition
+      (active_state → active_state → Prop)
+      -- step transition
+      × (active_state → active_state → Prop)
+      -- ask transition
+      × (active_state → waiting_state → Prop)
+      -- input handler
+      × (waiting_state → byte → active_state))
+      
+end relational
 
 def execution_step : machine_state -> step_result machine_state
 | ((tape, tape_position), []) := step_result.terminate
@@ -132,6 +248,8 @@ def feed_input : list byte -> process -> process :=
 
 constant is_correct_parse : program -> list byte -> Prop
 
+constant process_equivalent (process1 : process) (process2 : process) : Prop
+
 constant correct : 
   ∀ (p : program) (s : list byte), is_correct_parse p s
    -> 
@@ -159,3 +277,48 @@ constant correct :
 -- run_interpreter_from_ask : byte list -> (byte -> machine_state) -> time_budget -> output
 -- | nil -> λ _f _b, ([], false)
 -- | b :: input -> λ f budget -> run_interpreter_from_state (f b) budget input
+
+
+-- def find_matching_paren (program : )
+
+-- tape index
+-- double-tape brainfuck
+-- left = "<<"
+-- right = ">>"
+
+namespace simple_edsl
+  def program := list char
+  def char_to_byte : char -> byte
+  | '+' := 43
+  | '-' := 45
+  | '.' := 46
+  | '<' := 60
+  | '>' := 62
+  | ',' := 44
+  | _ := 0
+
+
+  def inner_big_case : Π (n : ℕ), (fin n -> program) → program
+  | nat.zero := λ _, []
+  | (nat.succ n) := λ f, []
+  -- def big_case (f : byte -> program) : program :=
+    
+
+  -- def case (branches : (byte × program)) (default : program): program :=
+    
+    
+  def boo : program := [ '+' ]
+
+  #print boo
+  -- for a given closing paren, find the matching opening paren
+  -- requirements: 
+  -- - null byte before program
+  -- - comments stripped
+  --
+  -- keep going left
+  -- replace
+  --[
+  --  case of
+  --  | ']' ->
+  --]
+end simple_edsl
