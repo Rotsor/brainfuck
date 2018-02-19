@@ -45,7 +45,7 @@ mk :: (fst : α)
 
 
 namespace relational
-  
+
   namespace in_out_mixed_up
     inductive effect : Type
     | input : char → effect
@@ -58,19 +58,22 @@ namespace relational
 
     def trace := list effect
 
-    inductive is_valid_trace_between (p : process) : trace → p.state → p.state → Prop
-    | empty {} : ∀ s, is_valid_trace_between [] s s
-    | step : ∀ {s1 s2 s3 e rest}, p.valid_transition s1 e s2 → is_valid_trace_between rest s2 s3 → is_valid_trace_between (e :: rest) s1 s3
+    inductive is_valid_trace_between_witness (p : process) : trace → p.state → p.state → Type
+    | empty {} : ∀ s, is_valid_trace_between_witness [] s s
+    | step : ∀ {s1 s2 s3 e rest}, p.valid_transition s1 e s2 → is_valid_trace_between_witness rest s2 s3 → is_valid_trace_between_witness (e :: rest) s1 s3
 
-    inductive valid_trace_between (p : process) : p.state → p.state → Prop
+    def is_valid_trace_between (p : process) : trace → p.state → p.state → Prop :=
+      λ t s1 s2, nonempty (is_valid_trace_between_witness p t s1 s2)
+
+    def transition_effect {p : process} {e s1 s2} : p.valid_transition s1 e s2 → effect := λ _, e
+
+    inductive valid_trace_between (p : process) : p.state → p.state → Type
     | empty {} : ∀ s, valid_trace_between s s
     | step : ∀ {s1 s2 s3 e}, p.valid_transition s1 e s2 → valid_trace_between s2 s3 → valid_trace_between s1 s3
 
     def compose_valid_trace {p : process} : ∀ {s1 s2 s3 : p.state}, valid_trace_between p s1 s2 → valid_trace_between p s2 s3 → valid_trace_between p s1 s3
-    | ._ _ _ (valid_trace_between.step transition rest) x := valid_trace_between.step transition (compose_valid_trace rest x)
-    | ._ _ _ (valid_trace_between.empty _) x := x
-
-    def valid_trace_compose {p : process} {t1 t2 : trace} {s1 s2 s3 : p.state} : is_valid_trace_between p t1 s1 s2 → is_valid_trace_between p t2 s2 s3 → is_valid_trace_between p (t1 ++ t2) s1 s2
+    | _ ._ _ (valid_trace_between.step transition rest) := λ x, valid_trace_between.step transition (compose_valid_trace rest x)
+    | _ ._ _ (valid_trace_between.empty _) := λ x, x
 
     def is_valid_trace_from (p : process) (t : trace) (s : p.state) : Prop :=
       ∃ (final_state : p.state), is_valid_trace_between p t s final_state
@@ -87,14 +90,40 @@ namespace relational
       (transitions1 : ∀ s1 s2, related s1 s2 → ∀ e d1, p1.valid_transition s1 e d1 → ∃ d2, related d1 d2 ∧ p2.valid_transition s2 e d2)
       (transitions2 : ∀ s1 s2, related s1 s2 → ∀ e d2, p2.valid_transition s2 e d2 → ∃ d1, related d1 d2 ∧ p1.valid_transition s1 e d1)
 
+    def is_reachable_from (p : process) (s1 s2 : p.state) : Prop :=
+      ∃ (t : trace), nonempty (is_valid_trace_between_witness p t s1 s2)
+
     def is_reachable (p : process) (s : p.state) : Prop :=
-      ∃ (t : trace), is_valid_trace_between p t p.initial_state s
+      is_reachable_from p p.initial_state s
+
+    def mk_valid_trace0 {p : process} : ∀ {t : trace}, ∀ {s1 s2 : p.state}, is_valid_trace_between_witness p t s1 s2 → valid_trace_between p s1 s2
+    | ._ _ _ (is_valid_trace_between_witness.empty _) := valid_trace_between.empty _
+    | ._ _ _ (is_valid_trace_between_witness.step transition rest) := valid_trace_between.step transition (mk_valid_trace0 rest)
+
+    def mk_valid_trace {p : process} : ∀ {s1 s2 : p.state}, is_reachable_from p s1 s2 → nonempty (valid_trace_between p s1 s2) :=
+      λ _ _ reachable, (exists.elim reachable (λ trace reachable, nonempty.elim reachable (λ witness, nonempty.intro (mk_valid_trace0 witness))))
+
+    def unmk_valid_trace {p : process} : ∀ {s1 s2 : p.state}, valid_trace_between p s1 s2 → is_reachable_from p s1 s2
+    | _ _ (valid_trace_between.step transition rest) := 
+      let r := unmk_valid_trace rest in
+      exists.elim r (λ t rest, exists.intro (transition_effect transition :: t) (nonempty.elim rest (λ rest, nonempty.intro (is_valid_trace_between_witness.step transition rest))))
+    | _ _ (valid_trace_between.empty _) := exists.intro [] (nonempty.intro (is_valid_trace_between_witness.empty _))
+
+
+
+    def reachability_step {p : process} {s1 s2 : p.state} : is_reachable p s1 → ∀ {t}, is_valid_trace_between p t s1 s2 → is_reachable p s2 :=
+      λ s1_reachable _t trace_to_s2, 
+        exists.elim s1_reachable (λ trace reachable,
+          nonempty.elim reachable (λ witness1, 
+            nonempty.elim trace_to_s2 (λ witness2,
+            let composition := compose_valid_trace (mk_valid_trace0 witness1) (mk_valid_trace0 witness2) in
+            unmk_valid_trace composition
+          )
+        ))
+        
 
     def and3_intro {A B C : Prop} (a : A) (b : B) (c : C) : A ∧ B ∧ C :=
       and.intro a (and.intro b c)
-
-    lemma singleton_trace_to_one_valid_transition {p : process} {s d : p.state} : ∀ {e}, is_valid_trace_between p [e] s d → (p.valid_transition s e d)
-    | _ (is_valid_trace_between.step valid (is_valid_trace_between.empty _)) := valid
 
     lemma lemma1 (p1 p2 : process) (equivalent : process_equivalent p1 p2) : process_equivalence p1 p2 :=
       { 
@@ -106,8 +135,8 @@ namespace relational
             is_valid_trace_from p2 t s2) ,
         initial_states_related := 
           and3_intro
-            (Exists.intro [] (is_valid_trace_between.empty _))
-            (Exists.intro [] (is_valid_trace_between.empty _))
+            (Exists.intro [] (nonempty.intro (is_valid_trace_between_witness.empty _)))
+            (Exists.intro [] (nonempty.intro (is_valid_trace_between_witness.empty _)))
             equivalent
           ,
         transitions1 :=
@@ -116,14 +145,15 @@ namespace relational
             let s2_reachable := s1_s2_related.right.left in
             let related := s1_s2_related.right.right in
             let small_trace := [e] in
-            let s1_to_d1 := (is_valid_trace_between.step s1_e_d1_valid (is_valid_trace_between.empty _)) in
+            let s1_to_d1 := nonempty.intro (is_valid_trace_between_witness.step s1_e_d1_valid (is_valid_trace_between_witness.empty _)) in
             let small_trace_valid1 := Exists.intro d1 s1_to_d1 in
             let small_trace_valid2 := (related [e]).mp small_trace_valid1 in
+            let d1_reachable := reachability_step s1_reachable s1_to_d1 in
             exists.elim small_trace_valid2 (λ d2 s2_to_d2, Exists.intro d2 (
               and.intro
                 (and3_intro
-                  _
-                  _
+                  (reachability_step s1_reachable s1_to_d1)
+                  (reachability_step s2_reachable s2_to_d2)
                   _)
                 (singleton_trace_to_one_valid_transition d2_good)
             ))
@@ -297,6 +327,75 @@ namespace simple_edsl
   | ',' := 44
   | _ := 0
 
+/-
+  --
+  -- sparse tape layout:
+  -- 0. accumulator (we stand here)
+  -- 1. helper
+  -- 2. data
+  -- 3. program (0 at beginning of program and end of program, 1 etc are op. codes); is always to the left of data
+  -- 4. instruction pointer (1 everywhere except one position where it's 0)
+  -- 5. data pointer (0 everywhere except one position where it's 1)
+  -- 6. stack (1 everywhere except:
+           - 0 at all the brackets that we want to match; 2 at top-level such bracket
+           - 0 temorarily at the closing bracket we're matching)
+  --
+  -- "<": ez
+  -- ">": ez
+  -- "+": ez
+  -- "-": ez
+  -- skip until ']':
+
+  *stack = 2;
+  while(todo) {
+    if('[') {
+      *stack = 0;
+    }
+    else if(']') {
+      *stack = 0;
+      stack--;
+      while(*stack) {
+        stack--;
+      }
+      if(!*ip) {
+        *stack = 1;
+        stack++;
+        while(*stack) {
+          stack++;
+        }
+        *stack = 1;
+        todo = false;
+      } else {
+        *stack = 1;
+        stack++;
+        while(*stack) {
+          stack++;
+        }
+        *stack = 1;
+      }
+    }
+  advance();
+}
+
+        if(!*stack){
+        } else {
+          stack--;
+          
+        }
+      }
+    }
+
+  }
+   if()
+   
+  -- skip instruction:
+  -- if
+  -- "[": 
+  -- skip to after ']': 
+  -- while 
+  -- if ... then >[] find the matching 
+  --  
+-/
 
   def inner_big_case : Π (n : ℕ), (fin n -> program) → program
   | nat.zero := λ _, []
