@@ -3,33 +3,6 @@ instance : has_add(byte) := ⟨fin.add⟩
 instance : has_one(byte) := ⟨(1 : fin 256)⟩
 instance : has_zero(byte) := ⟨(0 : fin 256)⟩
 
--- AST
-inductive brainfuck : Type
-| plus : brainfuck
-| minus : brainfuck
-| loop : list brainfuck -> brainfuck
-| print : brainfuck
-| ask : brainfuck
-| right : brainfuck
-| left : brainfuck
-
-def program := list brainfuck
-
--- Abstract machine
-def tape := (ℕ -> byte) × ℕ
-def machine_state : Type := 
-  tape × program
-
-inductive step_result (state : Type) : Type
-| terminate {} : step_result
-| ask : (byte -> state) -> step_result
-| print : byte × state -> step_result
-| step : state -> step_result
-
--- Interpreter 
-def modify_tape : (ℕ -> byte) -> ℕ -> byte -> (ℕ -> byte) :=
-  λ f i v j, if i = j then v else f j
-
 def increment_byte : byte -> byte :=
   fin.add 1
 
@@ -38,13 +11,113 @@ def decrement_byte : byte -> byte :=
 
 def zero_byte : byte := (0 : fin 256)
 
-universes u v w
+namespace a
+  inductive t
+  | qq : t
+end a
+namespace b
+  def z : a.t := a.t.qq
+end b
 
-structure lift2 (α : Sort u) : Sort (u + 1) :=
-mk :: (fst : α)
 
+namespace unix_process
 
-namespace relational
+  namespace with_coinduction 
+    inductive step_result (state : Type) : Type
+    | ask : (byte -> state) -> step_result
+    | print : byte × state -> step_result
+    | step : state -> step_result
+
+    structure process : Type 1 :=
+      (state : Type)
+      (initial_state : state)
+      (transition : state -> step_result state)
+
+    inductive process_equivalence_step
+      (eq : process → process → Prop) : process → process → Prop
+    | step1 :
+      ∀ (p1 p2 : process) (s1 : p1.state), 
+      (p1.transition p1.initial_state = step_result.step s1)
+      ∧ eq 
+      {
+        state := p1.state,
+        initial_state := s1,
+        transition := p1.transition
+      }
+      p2
+      → process_equivalence_step p1 p2      
+    | step2 :
+      ∀ (p1 p2 : process) (s2 : p2.state), 
+      (p2.transition p2.initial_state = step_result.step s2)
+      ∧ eq 
+      p1
+      {
+        state := p2.state,
+        initial_state := s2,
+        transition := p2.transition
+      }
+      → process_equivalence_step p1 p2      
+    | ask : 
+      ∀ (p1 p2 : process) (f1 : byte → p1.state) (f2 : byte → p2.state), 
+      (p1.transition p1.initial_state = step_result.ask f1)
+      ∧ (p2.transition p2.initial_state = step_result.ask f2)
+      ∧ (∀ c, eq 
+      {
+        state := p1.state,
+        initial_state := f1 c,
+        transition := p1.transition
+      }
+      {
+        state := p2.state,
+        initial_state := f2 c,
+        transition := p2.transition
+      })
+      → process_equivalence_step p1 p2
+    | print : 
+      ∀ (p1 p2 : process) (b1 : byte) (b2 : byte) (s1 : p1.state) (s2 : p2.state), 
+      (p1.transition p1.initial_state = step_result.print (b1, s1))
+      ∧ (p2.transition p2.initial_state = step_result.print (b2, s2))
+      ∧ eq 
+      {
+        state := p1.state,
+        initial_state := s1,
+        transition := p1.transition
+      }
+      {
+        state := p2.state,
+        initial_state := s2,
+        transition := p2.transition
+      }
+      → process_equivalence_step p1 p2      
+
+    def process_equivalence (p1 : process) (p2 : process) : Prop :=
+      ∃ (eq : process → process → Prop), eq p1 p2 ∧ (∀ p1 p2, eq p1 p2 -> process_equivalence_step eq p1 p2)
+
+  end with_coinduction 
+
+  namespace relational_honest
+
+    inductive mode : Type
+    | active
+    | waiting
+    | spins
+
+    inductive label : mode → Type
+    | output : byte → label mode.active
+    | ask : label mode.waiting
+    | spin : label mode.spins
+
+    -- describes a set of behaviors
+    structure spec : Type 1 :=
+      (state : mode → Type)
+      (initial_state : state mode.active)
+      (transition : ∀ {m} (s : state mode.active), label m → state m → Prop)
+      (take_input : state mode.waiting → byte → state mode.active)
+
+    def is_determined (spec : spec) : Prop :=
+      (∀ (s : spec.state mode.active), ∃! (m : mode) (l : label m) (s' : spec.state m), spec.transition s l s')
+
+  end relational_honest
 
   namespace in_out_mixed_up
     inductive effect : Type
@@ -109,8 +182,6 @@ namespace relational
       exists.elim r (λ t rest, exists.intro (transition_effect transition :: t) (nonempty.elim rest (λ rest, nonempty.intro (is_valid_trace_between_witness.step transition rest))))
     | _ _ (valid_trace_between.empty _) := exists.intro [] (nonempty.intro (is_valid_trace_between_witness.empty _))
 
-
-
     def reachability_step {p : process} {s1 s2 : p.state} : is_reachable p s1 → ∀ {t}, is_valid_trace_between p t s1 s2 → is_reachable p s2 :=
       λ s1_reachable _t trace_to_s2, 
         exists.elim s1_reachable (λ trace reachable,
@@ -120,51 +191,10 @@ namespace relational
             unmk_valid_trace composition
           )
         ))
-        
 
     def and3_intro {A B C : Prop} (a : A) (b : B) (c : C) : A ∧ B ∧ C :=
       and.intro a (and.intro b c)
 
-    lemma lemma1 (p1 p2 : process) (equivalent : process_equivalent p1 p2) : process_equivalence p1 p2 :=
-      { 
-        related := λ s1 s2
-          , is_reachable p1 s1 ∧
-            is_reachable p2 s2 ∧
-            (∀ t, 
-            is_valid_trace_from p1 t s1 ↔
-            is_valid_trace_from p2 t s2) ,
-        initial_states_related := 
-          and3_intro
-            (Exists.intro [] (nonempty.intro (is_valid_trace_between_witness.empty _)))
-            (Exists.intro [] (nonempty.intro (is_valid_trace_between_witness.empty _)))
-            equivalent
-          ,
-        transitions1 :=
-          λ s1 s2 s1_s2_related, λ e d1 s1_e_d1_valid,
-            let s1_reachable := s1_s2_related.left in
-            let s2_reachable := s1_s2_related.right.left in
-            let related := s1_s2_related.right.right in
-            let small_trace := [e] in
-            let s1_to_d1 := nonempty.intro (is_valid_trace_between_witness.step s1_e_d1_valid (is_valid_trace_between_witness.empty _)) in
-            let small_trace_valid1 := Exists.intro d1 s1_to_d1 in
-            let small_trace_valid2 := (related [e]).mp small_trace_valid1 in
-            let d1_reachable := reachability_step s1_reachable s1_to_d1 in
-            exists.elim small_trace_valid2 (λ d2 s2_to_d2, Exists.intro d2 (
-              and.intro
-                (and3_intro
-                  (reachability_step s1_reachable s1_to_d1)
-                  (reachability_step s2_reachable s2_to_d2)
-                  _)
-                (singleton_trace_to_one_valid_transition d2_good)
-            ))
-      }
-    
-
-    def process_equivalent (p1 : process) (p2 : process) : Prop :=
-      ∃ , (process_equivalent' p1 p2 related)
-
-    def process_leq (p1 : process) (p2 : process) : Prop :=
-      ∃ (related : p1.state → p2.state → Prop), (process_equivalent' p1 p2 related)
   end in_out_mixed_up
 
   def process : Type 1 :=
@@ -179,28 +209,64 @@ namespace relational
       -- input handler
       × (waiting_state → byte → active_state))
       
-end relational
+end unix_process
 
-def execution_step : machine_state -> step_result machine_state
-| ((tape, tape_position), []) := step_result.terminate
-| ((tape, tape_position), (brainfuck.plus :: k)) :=
-  step_result.step ((modify_tape tape tape_position (increment_byte (tape tape_position)), tape_position), k)
-| ((tape, tape_position), (brainfuck.minus :: k)) :=
-  step_result.step ((modify_tape tape tape_position (decrement_byte (tape tape_position)), tape_position), k)
-| ((tape, tape_position), (brainfuck.print :: k)) :=
-  step_result.print (tape tape_position, ((tape, tape_position), k))
-| ((tape, tape_position), (brainfuck.ask :: k)) :=
-  step_result.ask (λ x , ((modify_tape tape tape_position x, tape_position), k))
-| ((tape, tape_position), (brainfuck.right :: k)) :=
-  step_result.step ((tape, tape_position + 1), k)
-| ((tape, tape_position), (brainfuck.left :: k)) :=
-  step_result.step ((tape, tape_position - 1), k)
-| ((tape, tape_position), (brainfuck.loop body :: k)) :=
-  if tape tape_position = zero_byte
-  then
-  step_result.step ((tape, tape_position), k)
-  else
-  step_result.step ((tape, tape_position), (list.append body (brainfuck.loop body :: k)))
+namespace brainfuck
+  namespace ast
+    -- AST
+    inductive instruction : Type
+    | plus : instruction
+    | minus : instruction
+    | loop : list instruction -> instruction
+    | print : instruction
+    | ask : instruction
+    | right : instruction
+    | left : instruction
+
+    def program := list instruction
+  end ast
+
+  -- Interperter links Brainfuck programs to unix_process semantics
+  namespace interpreter
+
+    -- Abstract machine
+    def tape := (ℕ -> byte) × ℕ
+    def machine_state : Type := 
+      tape × ast.program
+
+    -- Interpreter 
+    def modify_tape : (ℕ -> byte) -> ℕ -> byte -> (ℕ -> byte) :=
+      λ f i v j, if i = j then v else f j
+
+    open unix_process.with_coinduction
+    open brainfuck.ast
+
+
+    def execution_step : machine_state -> step_result machine_state
+    | ((tape, tape_position), []) := step_result.step ((tape, tape_position), [])
+    | ((tape, tape_position), (instruction.plus :: k)) :=
+      step_result.step ((modify_tape tape tape_position (increment_byte (tape tape_position)), tape_position), k)
+    | ((tape, tape_position), (instruction.minus :: k)) :=
+      step_result.step ((modify_tape tape tape_position (decrement_byte (tape tape_position)), tape_position), k)
+    | ((tape, tape_position), (instruction.print :: k)) :=
+      step_result.print (tape tape_position, ((tape, tape_position), k))
+    | ((tape, tape_position), (instruction.ask :: k)) :=
+      step_result.ask (λ x , ((modify_tape tape tape_position x, tape_position), k))
+    | ((tape, tape_position), (instruction.right :: k)) :=
+      step_result.step ((tape, tape_position + 1), k)
+    | ((tape, tape_position), (instruction.left :: k)) :=
+      step_result.step ((tape, tape_position - 1), k)
+    | ((tape, tape_position), (instruction.loop body :: k)) :=
+      if tape tape_position = zero_byte
+      then
+      step_result.step ((tape, tape_position), k)
+      else
+      step_result.step ((tape, tape_position), (list.append body (instruction.loop body :: k)))
+
+  end interpreter
+
+end brainfuck
+
 
 def input : Type := list byte
 def output : Type := list byte × bool
@@ -287,6 +353,10 @@ constant correct :
        (feed_input (s ++ [zero_byte]) (interpret brainfuck_interpreter))
        (interpret p)
 
+end some_good_stuff
+
+
+
 --def print (b : byte) : process -> process :=
 --  λ (p : process) budget input, 
    --let res := p budget input in
@@ -326,6 +396,8 @@ namespace simple_edsl
   | '>' := 62
   | ',' := 44
   | _ := 0
+
+def 
 
 /-
   --
