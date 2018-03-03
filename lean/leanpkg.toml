@@ -1,0 +1,5 @@
+[package]
+name = "brainfuck"
+version = "0.1"
+
+[dependencies]
