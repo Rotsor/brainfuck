@@ -11,15 +11,6 @@ def decrement_byte : byte -> byte :=
 
 def zero_byte : byte := (0 : fin 256)
 
-namespace a
-  inductive t
-  | qq : t
-end a
-namespace b
-  def z : a.t := a.t.qq
-end b
-
-
 namespace unix_process
 
   namespace with_coinduction 
@@ -93,8 +84,45 @@ namespace unix_process
     def process_equivalence (p1 : process) (p2 : process) : Prop :=
       ∃ (eq : process → process → Prop), eq p1 p2 ∧ (∀ p1 p2, eq p1 p2 -> process_equivalence_step eq p1 p2)
 
-  end with_coinduction 
+    def uncons {A R : Type} : list A -> R -> (A → list A → R) → R
+    | list.nil := λ nil _, nil
+    | (x :: xs) := λ _ cons, cons x xs
 
+    def feed_input : list byte -> process -> process :=
+      λ input proces,
+      let state := proces.state in
+      let state0 := proces.initial_state in
+      let step := proces.transition in
+      ({ 
+        state := (list byte × state),
+        initial_state := (input, state0),
+        transition := (λ s, 
+        let extra_input := s.fst in
+        @step_result.rec_on
+          state 
+          (λ _, step_result (list byte × state)) (step s.snd)
+          -- ask is special: it should receive the [extra_input] if we have any remaining
+          (λ (f : byte -> state), 
+            let f' : byte -> (list byte × state) := λ (char : fin 256), ([], f char) in
+            uncons extra_input
+              -- no extra input
+              (step_result.ask f')
+              -- use the extra input
+              (λ byte rest, step_result.step (rest, f byte))
+            )
+          -- print
+          (λ s,
+            let byte := s.fst in
+            let s := s.snd in
+            step_result.print (byte, (extra_input, s))
+          )
+          -- step
+          (λ s,
+            step_result.step (extra_input, s)
+          ))
+          })
+
+  end with_coinduction 
   namespace relational_honest
 
     inductive mode : Type
@@ -263,97 +291,65 @@ namespace brainfuck
       else
       step_result.step ((tape, tape_position), (list.append body (instruction.loop body :: k)))
 
+    def machine_initial_state (p : program) : machine_state := 
+        (((λ (_ : ℕ), zero_byte), 0), p)
+
+    def interpret (p : program) : unix_process.with_coinduction.process :=
+      { 
+        state := machine_state,
+        initial_state := machine_initial_state p,
+        transition := execution_step,
+      }
+
   end interpreter
 
 end brainfuck
 
+namespace fuel_limited
 
-def input : Type := list byte
-def output : Type := list byte × bool
+  def input : Type := list byte
+  def output : Type := list byte × bool
 
-def time_budget : Type := ℕ
+  def time_budget : Type := ℕ
 
-namespace process0
-    -- given input so far, returns output so far and [true] if the program terminated
-    def process : Type :=
-    time_budget -> list byte -> output
+  -- given input so far, returns output so far and [true] if the program terminated
+  def process : Type :=
+  time_budget -> list byte -> output
 
-    def bool_leq : bool -> bool -> Prop
-    | ff := λ _, true
-    | tt := λ x, x = tt
+  def bool_leq : bool -> bool -> Prop
+  | ff := λ _, true
+  | tt := λ x, x = tt
 
-    def output_leq (output1 output2 : output) :=
-    bool_leq output1.snd output2.snd ∧
-    ∃ (suffix : list byte), append (output1.fst : list byte) suffix = output2.fst
+  def output_leq (output1 output2 : output) :=
+  bool_leq output1.snd output2.snd ∧
+  ∃ (suffix : list byte), append (output1.fst : list byte) suffix = output2.fst
 
-    def process_leq (worse : process) (better : process) : Prop :=
-    ∀ input time_budget, ∃ time_budget', output_leq (worse time_budget input) (better time_budget' input)
+  def process_leq (worse : process) (better : process) : Prop :=
+  ∀ input time_budget, ∃ time_budget', output_leq (worse time_budget input) (better time_budget' input)
 
-    def process_equivalent (process1 : process) (process2 : process) : Prop :=
-    process_leq process1 process2 ∧ process_leq process2 process1
-end process0
+  def process_equivalent (process1 : process) (process2 : process) : Prop :=
+  process_leq process1 process2 ∧ process_leq process2 process1
+end fuel_limited
 
-def process : Type 1 :=
-  Σ (state : Type), state × (state -> step_result state)
+constant brainfuck_interpreter : brainfuck.ast.program
 
-def machine_initial_state (p : program) : machine_state := 
-    (((λ (_ : ℕ), zero_byte), 0), p)
+constant is_correct_parse : brainfuck.ast.program -> list byte -> Prop
 
-def interpret (p : program) : process :=
-  sigma.mk machine_state (machine_initial_state p, execution_step)
-
-constant brainfuck_interpreter : program
-
-def optbyte := list byte
-
-def uncons {A R : Type} : list A -> R -> (A → list A → R) → R
-| list.nil := λ nil _, nil
-| (x :: xs) := λ _ cons, cons x xs
-
-def feed_input : list byte -> process -> process :=
-  λ input proces,
-  let state := proces.fst in
-  let state0 := proces.snd.fst in
-  let step := proces.snd.snd in
-  (@sigma.mk Type (λ (s : Type), s × (s -> step_result s)) (optbyte × state) ((input, state0), (λ s, 
-    let extra_input := s.fst in
-    @step_result.rec_on
-      state 
-      (λ _, step_result (optbyte × state)) (step s.snd)
-      -- terminate
-      (@step_result.terminate (optbyte × state))
-      -- ask is special: it should receive the [extra_input] if we have any remaining
-      (λ (f : byte -> state), 
-        let f' : byte -> (optbyte × state) := λ (char : fin 256), ([], f char) in
-        uncons extra_input
-          -- no extra input
-          (step_result.ask f')
-          -- use the extra input
-          (λ byte rest, step_result.step (rest, f byte))
-        )
-      -- print
-      (λ s,
-        let byte := s.fst in
-        let s := s.snd in
-        step_result.print (byte, (extra_input, s))
-      )
-      -- step
-      (λ s,
-        step_result.step (extra_input, s)
-      ))))
-
-constant is_correct_parse : program -> list byte -> Prop
-
-constant process_equivalent (process1 : process) (process2 : process) : Prop
+constant process_equivalent
+  (process1 : unix_process.with_coinduction.process) 
+  (process2 : unix_process.with_coinduction.process) : Prop
 
 constant correct : 
-  ∀ (p : program) (s : list byte), is_correct_parse p s
-   -> 
+  ∀
+   (p : brainfuck.ast.program) 
+   (source : list byte),
+   is_correct_parse p source -> 
     process_equivalent
-       (feed_input (s ++ [zero_byte]) (interpret brainfuck_interpreter))
-       (interpret p)
+       (unix_process.with_coinduction.feed_input
+         (source ++ [zero_byte])
+         (brainfuck.interpreter.interpret brainfuck_interpreter))
+       (brainfuck.interpreter.interpret p)
 
-end some_good_stuff
 
 
 
@@ -396,8 +392,6 @@ namespace simple_edsl
   | '>' := 62
   | ',' := 44
   | _ := 0
-
-def 
 
 /-
   --
