@@ -3,3 +3,4 @@
 *.o
 /lean/leanpkg.path
 /lean/_target/deps
+*.olean
