@@ -1,5 +1,3 @@
--- what
--- whhaaat
 import .byte
 open byte
 namespace unix
@@ -228,4 +226,31 @@ namespace another
       -- input handler
       × (waiting_state → byte → active_state))
 end another
+
+namespace fuel_limited
+
+  def input : Type := list byte
+  def output : Type := list byte × bool
+
+  def time_budget : Type := ℕ
+
+  -- given input so far, returns output so far and [true] if the program terminated
+  def process : Type :=
+  time_budget -> list byte -> output
+
+  def bool_leq : bool -> bool -> Prop
+  | ff := λ _, true
+  | tt := λ x, x = tt
+
+  def output_leq (output1 output2 : output) :=
+  bool_leq output1.snd output2.snd ∧
+  ∃ (suffix : list byte), append (output1.fst : list byte) suffix = output2.fst
+
+  def process_leq (worse : process) (better : process) : Prop :=
+  ∀ input time_budget, ∃ time_budget', output_leq (worse time_budget input) (better time_budget' input)
+
+  def process_equivalent (process1 : process) (process2 : process) : Prop :=
+  process_leq process1 process2 ∧ process_leq process2 process1
+end fuel_limited
+
 end unix

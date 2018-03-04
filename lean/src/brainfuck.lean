@@ -67,32 +67,6 @@ namespace brainfuck
 
 end brainfuck
 
-namespace fuel_limited
-
-  def input : Type := list byte
-  def output : Type := list byte × bool
-
-  def time_budget : Type := ℕ
-
-  -- given input so far, returns output so far and [true] if the program terminated
-  def process : Type :=
-  time_budget -> list byte -> output
-
-  def bool_leq : bool -> bool -> Prop
-  | ff := λ _, true
-  | tt := λ x, x = tt
-
-  def output_leq (output1 output2 : output) :=
-  bool_leq output1.snd output2.snd ∧
-  ∃ (suffix : list byte), append (output1.fst : list byte) suffix = output2.fst
-
-  def process_leq (worse : process) (better : process) : Prop :=
-  ∀ input time_budget, ∃ time_budget', output_leq (worse time_budget input) (better time_budget' input)
-
-  def process_equivalent (process1 : process) (process2 : process) : Prop :=
-  process_leq process1 process2 ∧ process_leq process2 process1
-end fuel_limited
-
 constant brainfuck_interpreter : brainfuck.ast.program
 
 constant is_correct_parse : brainfuck.ast.program -> list byte -> Prop
@@ -143,6 +117,46 @@ constant correct :
 -- double-tape brainfuck
 -- left = "<<"
 -- right = ">>"
+
+
+-- brainfuck variant with interleaved named tapes and some extra stuff
+namespace spare_tape_lang
+  variable tape : Type
+  variable tape_item : tape → Type
+  
+
+
+  inductive instruction : Type
+  | prim : instruction
+  | while : tape → list instruction → instruction
+  | ask : tape → instruction
+  | print : tape → instruction
+  | left : instruction
+  | right : instruction
+  | case : tape → list (list instruction) → instruction
+
+  def program : Type := list (instruction tape)
+
+  variable accumulator : tape
+  def state : Type := 
+    (∀ (t : tape), ℕ → tape_item t) × program tape
+
+  constant trace : program tape → state tape tape_item → state tape tape_item → Type
+
+  /- def implements_relation (p : program) : (state → state → Prop) → Prop
+    := λ R → ∀ s1 s2, R s1 s2 → ∃ trace p s1 s2 -/
+  
+
+end spare_tape_lang
+
+/-def paren_matcher
+  (tape : Type)
+  (accumulator : tape)
+  (looking_at : tape)
+  (is_left_paren : spare_tape_lang.program tape) -- program that puts 1
+  := -/
+
+
 
 namespace simple_edsl
   def program := list char
