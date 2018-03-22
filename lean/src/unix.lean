@@ -109,6 +109,26 @@ namespace with_coinduction
           step_result.step (extra_input, s)
         ))
         })
+  
+  def transition_function (s : Type) : Type := (s → step_result s)
+
+  def run_s {s : Type} (transition : transition_function s) : nat → s → list byte → list byte × (s × list byte)
+  | nat.zero := λ s input, ([], (s, input))
+  | (nat.succ n) := λ s input,
+    match transition s with
+    | step_result.ask f :=
+      match input with
+      | [] := ([], s, input)
+      | head :: rest := run_s n (f head) rest
+      end
+    | step_result.print (char, s) :=
+      let res := run_s n s input in
+      ((char :: res.fst), res.snd)
+    | step_result.step s :=
+      run_s n s input
+    end
+
+  
 
 end with_coinduction 
 namespace relational_honest
