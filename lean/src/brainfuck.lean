@@ -526,6 +526,8 @@ namespace simple_edsl
   | '<' := 60
   | '>' := 62
   | ',' := 44
+  | '[' := 91
+  | ']' := 93
   | _ := 0
 
 /-
@@ -607,10 +609,19 @@ namespace simple_edsl
 
   def boo : program := [ '+' ]
 
-  def parsed := 
+  def parsed1 := 
     brainfuck.concrete_syntax.parse 
-      (list.map char_to_byte [ ])
-  #eval parsed
+      (list.map char_to_byte [ '[', '[', ']', ']' ])
+
+  def parsed2 := 
+    brainfuck.concrete_syntax.parse 
+      (list.map char_to_byte [ 'x' ])
+
+  def blah : brainfuck.concrete_syntax.or_error unit := brainfuck.concrete_syntax.or_error.ok ()
+  def qqq : option int := some 3
+  #eval parsed1
+  #eval parsed2
+  #eval blah
   
   #print boo
   -- for a given closing paren, find the matching opening paren
@@ -625,4 +636,3 @@ namespace simple_edsl
   --  | ']' ->
   --]
 end simple_edsl
-
