@@ -1,6 +1,9 @@
 import .byte
 import .unix
 open byte
+
+universes u v
+
 namespace brainfuck
   namespace ast
     -- AST
@@ -68,33 +71,74 @@ namespace brainfuck
   end interpreter
 
   namespace concrete_syntax
-    def cst : Type := list byte -- reverse
+
+    def string : Type := list byte -- reverse
+    instance : has_append(string) := ⟨ list.append ⟩
 
     def lparen : byte := 91
     def rparen : byte := 93
 
-    inductive well_formed_simple_instruction : byte → ast.instruction → Prop
-    | plus  : well_formed_simple_instruction 43 ast.instruction.plus
-    | minus : well_formed_simple_instruction 45 ast.instruction.minus
-    | lt    : well_formed_simple_instruction 60 ast.instruction.left
-    | gt    : well_formed_simple_instruction 62 ast.instruction.right
-    | dot   : well_formed_simple_instruction 46 ast.instruction.print
-    | comma : well_formed_simple_instruction 44 ast.instruction.ask
+    -- decidable with witness
+    inductive or_error (α : Type u) : Type u
+    | error : (α → false) → or_error
+    | ok : α → or_error
 
-    instance : has_append(cst) := ⟨ list.append ⟩
+    def witness_unique {α : Sort u} (p : α → Prop) : Sort (max 1 u) :=
+    { x : α // p x ∧ ∀ y, p y → y = x }
 
-    def is_special_char (c : char) :=
-      (∃ p, well_formed_simple_instruction c p)
+    notation `Σ!` binders `, ` r:(scoped P, witness_unique P) := r
+
+    def unambiguous_parse (T : Type) (G : string → T → Prop) (s : string) :=
+      or_error (Σ! t, G s t)
+
+    def unambiguous_parser (T : Type) (G : string → T → Prop)
+      := ∀ s, unambiguous_parse T G s
+
+    inductive simple_instruction_parsing_derivation : byte → ast.instruction → Prop
+    | plus  : simple_instruction_parsing_derivation 43 ast.instruction.plus
+    | minus : simple_instruction_parsing_derivation 45 ast.instruction.minus
+    | lt    : simple_instruction_parsing_derivation 60 ast.instruction.left
+    | gt    : simple_instruction_parsing_derivation 62 ast.instruction.right
+    | dot   : simple_instruction_parsing_derivation 46 ast.instruction.print
+    | comma : simple_instruction_parsing_derivation 44 ast.instruction.ask
+
+    def is_special_char (c : byte) :=
+      (∃ p, simple_instruction_parsing_derivation c p)
       ∨ c = lparen
       ∨ c = rparen
-    inductive well_formed_program : cst → ast.program → Prop
-    | empty : well_formed_program [] []
-    | append : ∀ s1 p1 s2 p2, well_formed_program s1 p1 → well_formed_program s2 p2 → well_formed_program (s1 ++ s2) (p1 ++ p2)
-    | comment : ∀ c, ¬ is_special_char c → well_formed_program [c] []
-    | simple_instruction : ∀ b i, well_formed_simple_instruction b i → well_formed_program [b] [i]
+
+    def opt_cons {A : Type} (x : option A) (l : list A) :=
+      match x with
+      | option.none := l
+      | option.some x := x :: l
+      end
+
+    mutual inductive
+      program_parsing_derivation,
+      instruction_or_comment_parsing_derivation,
+      instruction_parsing_derivation
+
+    with program_parsing_derivation : string → ast.program → Prop
+    | empty : program_parsing_derivation [] []
+    | cons : ∀ s1 p1 s2 p2,
+       instruction_or_comment_parsing_derivation s1 p1
+       → program_parsing_derivation s2 p2
+       → program_parsing_derivation (s1 ++ s2) (opt_cons p1 p2)
+
+    with instruction_or_comment_parsing_derivation : string → option ast.instruction → Prop
+    | comment : ∀ c, ¬ is_special_char c → instruction_or_comment_parsing_derivation [c] option.none
+    | instruction :
+      ∀ s i, instruction_parsing_derivation s i
+      → instruction_or_comment_parsing_derivation s (option.some i)
+    with instruction_parsing_derivation : string → ast.instruction → Prop
+    | simple_instruction : ∀ b i,
+       simple_instruction_parsing_derivation b i
+       → instruction_parsing_derivation [b] i
     | while_loop : 
-      ∀ s p, well_formed_program s p →
-       well_formed_program ([ lparen ] ++ s ++ [ rparen ]) [ast.instruction.loop p]
+      ∀ s p, program_parsing_derivation s p →
+       instruction_parsing_derivation
+         ([ lparen ] ++ s ++ [ rparen ])
+         (ast.instruction.loop p)
 
     inductive right_side_context : Type
     | top_level : right_side_context
@@ -102,101 +146,81 @@ namespace brainfuck
 
     def right_side_zipper := ast.program × right_side_context
 
-    inductive well_formed_suffix : cst → right_side_zipper → Prop
-    | empty : well_formed_suffix [] ([], right_side_context.top_level)
-    | program : ∀ s1 p1 s2 p2,
-      well_formed_program s1 p1 →
-      well_formed_suffix s2 p2 → 
-      well_formed_suffix (s1 ++ s2) (p1 ++ p2.fst, p2.snd)
-    | right_paren : ∀ s1 p1, well_formed_suffix s1 p1 → well_formed_suffix (rparen :: s1) ([], right_side_context.in_loop p1)
+    inductive program_suffix_parsing_derivation : string → right_side_zipper → Prop
+    | empty : program_suffix_parsing_derivation [] ([], right_side_context.top_level)
+    | cons : ∀ s1 p1 s2 p2,
+      instruction_or_comment_parsing_derivation s1 p1 →
+      program_suffix_parsing_derivation s2 p2 → 
+      program_suffix_parsing_derivation (s1 ++ s2) (opt_cons p1 p2.fst, p2.snd)
+    | right_paren :
+        ∀ s1 p1, program_suffix_parsing_derivation s1 p1
+        → program_suffix_parsing_derivation (rparen :: s1) ([], right_side_context.in_loop p1)
     | left_paren : 
       ∀ s1 loop_body outer_context,
-      well_formed_suffix s1 (loop_body, right_side_context.in_loop outer_context)
-      → well_formed_suffix (lparen :: s1) (ast.instruction.loop loop_body :: outer_context.fst, outer_context.snd)
-
-/-    mutual 
-    inductive well_formed_suffix_v2, well_formed_context_v2
-    with well_formed_suffix_v2 : cst → right_side_zipper → Prop
-    | program : ∀ s1 p1 s2 p2,
-      well_formed_program s1 p1 →
-      well_formed_context_v2 s2 p2 → 
-      well_formed_suffix_v2 (s1 ++ s2) (p1, p2)
-    with well_formed_context_v2 : cst → right_side_context → Prop
-    | empty : well_formed_context_v2 : 
-      well_formed_context_v2 [] right_side_context.empty
-    | right_paren : 
-      ∀ s (p : right_side_zipper), well_formed_suffix_v2 s p
-      → well_formed_context_v2 (rparen :: s) (right_side_context.in_loop p) -/
+      program_suffix_parsing_derivation s1 (loop_body, right_side_context.in_loop outer_context)
+      → program_suffix_parsing_derivation (lparen :: s1) (ast.instruction.loop loop_body :: outer_context.fst, outer_context.snd)
 
     inductive parsed_char : byte → Type
-    | simple_instruction : ∀ b i, well_formed_simple_instruction b i → parsed_char b
+    | simple_instruction : ∀ b i, simple_instruction_parsing_derivation b i → parsed_char b
     | lparen : parsed_char lparen
     | rparen : parsed_char rparen
     | comment : ∀ b, ¬ is_special_char b → parsed_char b
 
-    universes u v 
-
-    -- decidable with witness
-    inductive or_error (α : Type u) : Type u
-    | error : (α → false) → or_error
-    | ok : α → or_error
-
     def subst {A : Sort u} (P : A → Sort v) : ∀ {x y : A}, x = y → P x → P y
     | _ _ (eq.refl _) := λ x, x
 
-    
     def refute : ∀ (c : byte),
       (¬ 43 = c) → (¬ 45 = c) → (¬ 60 = c) → (¬ 62 = c) → (¬ 46 = c) → (¬ 44 = c)
-      → ∀ i, well_formed_simple_instruction c i → false
-    | ._ neq _ _ _ _ _ _ well_formed_simple_instruction.plus := neq (eq.refl _)
-    | ._ _ neq _ _ _ _ _ well_formed_simple_instruction.minus := neq (eq.refl _)
-    | ._ _ _ neq _ _ _ _ well_formed_simple_instruction.lt := neq (eq.refl _)
-    | ._ _ _ _ neq _ _ _ well_formed_simple_instruction.gt := neq (eq.refl _)
-    | ._ _ _ _ _ neq _ _ well_formed_simple_instruction.dot := neq (eq.refl _)
-    | ._ _ _ _ _ _ neq _ well_formed_simple_instruction.comma := neq (eq.refl _)
+      → ∀ i, simple_instruction_parsing_derivation c i → false
+    | ._ neq _ _ _ _ _ _ simple_instruction_parsing_derivation.plus := neq (eq.refl _)
+    | ._ _ neq _ _ _ _ _ simple_instruction_parsing_derivation.minus := neq (eq.refl _)
+    | ._ _ _ neq _ _ _ _ simple_instruction_parsing_derivation.lt := neq (eq.refl _)
+    | ._ _ _ _ neq _ _ _ simple_instruction_parsing_derivation.gt := neq (eq.refl _)
+    | ._ _ _ _ _ neq _ _ simple_instruction_parsing_derivation.dot := neq (eq.refl _)
+    | ._ _ _ _ _ _ neq _ simple_instruction_parsing_derivation.comma := neq (eq.refl _)
 
-    def parse_simple_instruction : ∀ c, or_error (subtype (λ i, well_formed_simple_instruction c i)) :=
+    def parse_simple_instruction : ∀ c, or_error (subtype (λ i, simple_instruction_parsing_derivation c i)) :=
       λ c,
       match fin.decidable_eq 256 43 c with
       | decidable.is_true eq := or_error.ok {
         val := ast.instruction.plus,
         property := 
-          @subst byte (λ c : byte, well_formed_simple_instruction c ast.instruction.plus) _ _ eq well_formed_simple_instruction.plus
+          @subst byte (λ c : byte, simple_instruction_parsing_derivation c ast.instruction.plus) _ _ eq simple_instruction_parsing_derivation.plus
       }
       | decidable.is_false neq_plus :=
       match fin.decidable_eq 256 45 c with
       | decidable.is_true eq := or_error.ok {
         val := ast.instruction.minus,
         property := 
-          @subst byte (λ c : byte, well_formed_simple_instruction c ast.instruction.minus) _ _ eq well_formed_simple_instruction.minus
+          @subst byte (λ c : byte, simple_instruction_parsing_derivation c ast.instruction.minus) _ _ eq simple_instruction_parsing_derivation.minus
       }
       | decidable.is_false neq_minus :=
       match fin.decidable_eq 256 60 c with
       | decidable.is_true eq := or_error.ok {
         val := ast.instruction.left,
         property := 
-          @subst byte (λ c : byte, well_formed_simple_instruction c ast.instruction.left) _ _ eq well_formed_simple_instruction.lt
+          @subst byte (λ c : byte, simple_instruction_parsing_derivation c ast.instruction.left) _ _ eq simple_instruction_parsing_derivation.lt
       }
       | decidable.is_false neq_left :=
       match fin.decidable_eq 256 62 c with
       | decidable.is_true eq := or_error.ok {
         val := ast.instruction.right,
         property := 
-          @subst byte (λ c : byte, well_formed_simple_instruction c ast.instruction.right) _ _ eq well_formed_simple_instruction.gt
+          @subst byte (λ c : byte, simple_instruction_parsing_derivation c ast.instruction.right) _ _ eq simple_instruction_parsing_derivation.gt
       }
       | decidable.is_false neq_right :=
       match fin.decidable_eq 256 46 c with
       | decidable.is_true eq := or_error.ok {
         val := ast.instruction.print,
         property := 
-          @subst byte (λ c : byte, well_formed_simple_instruction c ast.instruction.print) _ _ eq well_formed_simple_instruction.dot
+          @subst byte (λ c : byte, simple_instruction_parsing_derivation c ast.instruction.print) _ _ eq simple_instruction_parsing_derivation.dot
       }
       | decidable.is_false neq_print :=
       match fin.decidable_eq 256 44 c with
       | decidable.is_true eq := or_error.ok {
         val := ast.instruction.ask,
         property := 
-          @subst byte (λ c : byte, well_formed_simple_instruction c ast.instruction.ask) _ _ eq well_formed_simple_instruction.comma
+          @subst byte (λ c : byte, simple_instruction_parsing_derivation c ast.instruction.ask) _ _ eq simple_instruction_parsing_derivation.comma
       }
       | decidable.is_false neq_ask :=
         or_error.error (λ s, refute _ neq_plus neq_minus neq_left neq_right neq_print neq_ask s.val s.property)
@@ -209,7 +233,7 @@ namespace brainfuck
 
     def refute2 : ∀ c, 
       (¬ c = lparen) → (¬ c = rparen)
-      → ((subtype (λ i, well_formed_simple_instruction c i)) → false)
+      → ((subtype (λ i, simple_instruction_parsing_derivation c i)) → false)
       → is_special_char c → false :=
       λ _ eql eqr none is_special,
       or.elim is_special 
@@ -233,100 +257,106 @@ namespace brainfuck
         end
 
     def step0 : 
-      ∀ (c : char) (s : cst) (p : right_side_zipper), parsed_char c → 
-      well_formed_suffix s p → option right_side_zipper
+      ∀ (c : byte) (s : string) (p : right_side_zipper), parsed_char c → 
+      program_suffix_parsing_derivation s p → option right_side_zipper
     | ._ s p parsed_char.rparen w := 
       option.some ([], right_side_context.in_loop p)
-    | ._ s (p1, right_side_context.top_level) parsed_char.lparen w :=
-      option.none
     | ._ s (p0, right_side_context.in_loop (p1, c)) parsed_char.lparen w :=
       option.some (ast.instruction.loop p0 :: p1, c)
     | ._ s p (parsed_char.simple_instruction b i wi) w :=
       option.some (i :: p.fst, p.snd)
     | ._ s p (parsed_char.comment b non_special) w :=
       option.some (p.fst, p.snd)
+    | ._ s (p1, right_side_context.top_level) parsed_char.lparen w :=
+      option.none
 
-    def step0_unavoidable : 
-      ∀ c (parsed_c : parsed_char c) (s : cst) p,
-      well_formed_suffix (c :: s) p
-      → ∃ p' w', step0 c s p' parsed_c w' = option.some p
+    def unstep0 : 
+      ∀ (s : string) p,
+      program_suffix_parsing_derivation s p
+      → (∃ c parsed_c p' w', step0 c s p' parsed_c w' = option.some p)
+       ∨ s = []
       :=
-      λ c pc s p w, 
-      well_formed_suffix.rec_on
-        w
-        sorry -- empty, impossible case
-        sorry -- program
-        sorry -- right_paren
-        sorry -- left_paren
+      λ s p w,
+      program_suffix_parsing_derivation.rec_on
+          w
+          begin -- empty
+            intros,
+            exact (or.intro_right _ (eq.refl _))
+          end
+          begin  -- cons
+            intros s1 p1 s2 p2 instruction_or_comment rest_of_program induction eq,
+          end
+          sorry -- right_paren
+          sorry -- left_paren
+        
 /-    | c parsed_c s p 
-      (well_formed_suffix.program _ _ _ (p'_fst, p'_snd) (well_formed_program.empty) w) :=
+      (program_suffix_parsing_derivation.program _ _ _ (p'_fst, p'_snd) (program_parsing_derivation.empty) w) :=
       step0_unavoidable c parsed_c _ p w
 
-    def xx : unit := ()
-    inductive well_formed_program : cst → ast.program → Prop
-    | append : ∀ s1 p1 s2 p2, well_formed_program s1 p1 → well_formed_program s2 p2 → well_formed_program (s1 ++ s2) (p1 ++ p2)
-    | comment : ∀ c, ¬ is_special_char c → well_formed_program [c] []
-    | simple_instruction : ∀ b i, well_formed_simple_instruction b i → well_formed_program [b] [i]
+    inductive program_parsing_derivation : string → ast.program → Prop
+    | append : ∀ s1 p1 s2 p2, program_parsing_derivation s1 p1 → program_parsing_derivation s2 p2 → program_parsing_derivation (s1 ++ s2) (p1 ++ p2)
+    | comment : ∀ c, ¬ is_special_char c → program_parsing_derivation [c] []
+    | simple_instruction : ∀ b i, simple_instruction_parsing_derivation b i → program_parsing_derivation [b] [i]
     | while_loop : 
-      ∀ s p, well_formed_program s p →
-       well_formed_program ([ lparen ] ++ s ++ [ rparen ]) [ast.instruction.loop p]
+      ∀ s p, program_parsing_derivation s p →
+       program_parsing_derivation ([ lparen ] ++ s ++ [ rparen ]) [ast.instruction.loop p]
 
     | program : ∀ s1 p1 s2 p2, 
-      well_formed_program s1 p1 →
-      well_formed_suffix s2 p2 → 
-      well_formed_suffix (s1 ++ s2) (p1 ++ p2.fst, p2.snd)
-    | right_paren : ∀ s1 p1, well_formed_suffix s1 p1 → well_formed_suffix (rparen :: s1) ([], right_side_context.in_loop p1)
+      program_parsing_derivation s1 p1 →
+      program_suffix_parsing_derivation s2 p2 → 
+      program_suffix_parsing_derivation (s1 ++ s2) (p1 ++ p2.fst, p2.snd)
+    | right_paren : ∀ s1 p1, program_suffix_parsing_derivation s1 p1 → program_suffix_parsing_derivation (rparen :: s1) ([], right_side_context.in_loop p1)
     | left_paren : 
       ∀ s1 loop_body outer_context,
-      well_formed_suffix s1 (loop_body, right_side_context.in_loop outer_context)
-      → well_formed_suffix (lparen :: s1) (ast.instruction.loop loop_body :: outer_context.fst, outer_context.snd)
+      program_suffix_parsing_derivation s1 (loop_body, right_side_context.in_loop outer_context)
+      → program_suffix_parsing_derivation (lparen :: s1) (ast.instruction.loop loop_body :: outer_context.fst, outer_context.snd)
 -/
 
     /- def prefix_ambiguity_step :
-      ∀ c (parsed_c : parsed_char c) (s : cst),
+      ∀ c (parsed_c : parsed_char c) (s : string),
       (∀ p1 p2, 
-      well_formed_suffix s p1
-      → well_formed_suffix s p2
+      program_suffix_parsing_derivation s p1
+      → program_suffix_parsing_derivation s p2
       → p1 = p2)
       → (∀ p1 p2, 
-      well_formed_suffix (c :: s) p1
-      → well_formed_suffix (c :: s) p2
+      program_suffix_parsing_derivation (c :: s) p1
+      → program_suffix_parsing_derivation (c :: s) p2
       → p1 = p2)
     | ._ parsed_char.rparen := 
       λ f, 
       λ p1 p2  -/
 
     /- def no_prefix_ambiguity :
-      ∀ (s : cst) p1 p2
-      → well_formed_suffix s p1
-      → well_formed_suffix s p2
+      ∀ (s : string) p1 p2
+      → program_suffix_parsing_derivation s p1
+      → program_suffix_parsing_derivation s p2
       → p1 = p2
     |  :=  -/
 
     /-def impossible_to_close_paren 
-      : ∀ (s : cst) p, well_formed_suffix s (right_side_context.top_level, p)
+      : ∀ (s : string) p, program_suffix_parsing_derivation s (right_side_context.top_level, p)
       → ∀ {s2} {p2 : right_side_zipper}, s2 = (s ++ [ rparen ]) 
-      → well_formed_suffix s2 p2
+      → program_suffix_parsing_derivation s2 p2
       → false
     | _ _ _ ._ ._ eq (closing_paren s1 c1 p0 p1 w1 := sorry -/
 /-
-    | empty : well_formed_suffix [] (right_side_context.top_level, [])
+    | empty : program_suffix_parsing_derivation [] (right_side_context.top_level, [])
     | program : ∀ s1 p1 s2 p2, 
-      well_formed_suffix s1 p1 → well_formed_program s2 p2 → well_formed_suffix (s1 ++ s2) (p1.fst, p1.snd ++ p2)
+      program_suffix_parsing_derivation s1 p1 → program_parsing_derivation s2 p2 → program_suffix_parsing_derivation (s1 ++ s2) (p1.fst, p1.snd ++ p2)
     | closing_paren : 
       ∀ s1 c1 p0 p1, 
-      well_formed_suffix s1 (right_side_context.in_loop (c1, p0), p1) 
-      → well_formed_suffix (s1 ++ [rparen]) (c1, p0 ++ [ast.instruction.loop p1])
+      program_suffix_parsing_derivation s1 (right_side_context.in_loop (c1, p0), p1) 
+      → program_suffix_parsing_derivation (s1 ++ [rparen]) (c1, p0 ++ [ast.instruction.loop p1])
 -/
 
     def step : 
-      ∀ (c : char) (s : cst) (p : right_side_zipper), parsed_char c → 
-      well_formed_suffix s p → 
-      or_error (subtype (λ (p2 : right_side_zipper), well_formed_suffix (c :: s) p2))
+      ∀ (c : byte) (s : string) (p : right_side_zipper), parsed_char c → 
+      program_suffix_parsing_derivation s p → 
+      or_error (subtype (λ (p2 : right_side_zipper), program_suffix_parsing_derivation (c :: s) p2))
     | ._ s p parsed_char.rparen w := 
       or_error.ok ({ subtype.
           val := ([], right_side_context.in_loop p),
-          property := well_formed_suffix.right_paren s p w
+          property := program_suffix_parsing_derivation.right_paren s p w
         })
     | ._ s (p1, right_side_context.top_level) parsed_char.lparen w :=
       or_error.error (sorry)
@@ -334,34 +364,32 @@ namespace brainfuck
       or_error.ok ({ subtype.
           val := (ast.instruction.loop p0 :: p1, c),
           property :=
-            well_formed_suffix.left_paren 
+            program_suffix_parsing_derivation.left_paren 
               s p0 (p1, c) w
         })
     | ._ s p (parsed_char.simple_instruction b i wi) w :=
       or_error.ok ({
         val := (i :: p.fst, p.snd),
         property := 
-          well_formed_suffix.program [ b ] [ i ] s p
-            (well_formed_program.simple_instruction b i wi) w
+          program_suffix_parsing_derivation.program [ b ] [ i ] s p
+            (program_parsing_derivation.simple_instruction b i wi) w
       })
     | ._ s p (parsed_char.comment b non_special) w :=
       or_error.ok ({
         val := (p.fst, p.snd),
         property := 
-          well_formed_suffix.program [ b ] [ ] s p
-            (well_formed_program.comment b non_special) w
+          program_suffix_parsing_derivation.program [ b ] [ ] s p
+            (program_parsing_derivation.comment b non_special) w
       })
 
-    #check list.rec_on
-
-    def parse_as_suffix (s : cst) : 
-      or_error (subtype (λ (p : right_side_zipper), well_formed_suffix s p))
+    def parse_as_suffix (s : string) : 
+      or_error (subtype (λ (p : right_side_zipper), program_suffix_parsing_derivation s p))
       := 
       list.rec_on s
         (or_error.ok {
           val := ([], right_side_context.top_level),
           property := 
-            well_formed_suffix.empty
+            program_suffix_parsing_derivation.empty
         })
         (λ c s accum,
           or_error.rec_on
@@ -374,22 +402,22 @@ namespace brainfuck
 
     def no_unclosed_parens : 
       ∀ {s},
-      (subtype (λ (p : right_side_zipper), well_formed_suffix s p))
+      (subtype (λ (p : right_side_zipper), program_suffix_parsing_derivation s p))
       → or_error (
-        (subtype (λ (p : ast.program), well_formed_program s p))
+        (subtype (λ (p : ast.program), program_parsing_derivation s p))
       ) :=
       λ s z, match z.val.snd with
         | right_side_context.top_level := 
-          -- this is actually not trivial with our definition of well_formed_suffix
+          -- this is actually not trivial with our definition of program_suffix_parsing_derivation
           or_error.ok ⟨ z.val.fst, sorry ⟩
         | right_side_context.in_loop _ :=
           or_error.error sorry
         end
       
-    def parse (s : cst) : 
-      or_error (subtype (λ (p : ast.program), well_formed_program s p))
+    def parse (s : string) :
+      or_error (subtype (λ (p : ast.program), program_parsing_derivation s p))
       := 
-      or_error.rec_on 
+      or_error.rec_on
         (parse_as_suffix s)
         sorry
         (λ res, no_unclosed_parens res)
