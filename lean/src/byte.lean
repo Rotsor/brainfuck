@@ -1,4 +1,5 @@
 def byte := fin 256
+instance : has_repr byte := ⟨ (λ ⟨ n, _ ⟩, repr (char.of_nat n) : (fin 256) → string) ⟩
 
 namespace byte
   instance : has_add(byte) := ⟨fin.add⟩

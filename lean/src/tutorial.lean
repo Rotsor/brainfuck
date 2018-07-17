@@ -79,7 +79,7 @@ end section_4_6_3
 
 
 namespace section_4_6_4
-    namespace hide
+    namespace hidden
 
     def divides (m n : ℕ) : Prop := ∃ k, m * k = n
 
@@ -95,7 +95,7 @@ namespace section_4_6_4
     #check even (m^n +3)
     end
 
-    end hide
+    end hidden
 
     def prime (n : ℕ) : Prop := 
         (¬ n = 1) ∧ (∀ d, d ∣ n → d = 1 ∨ d = n)
@@ -104,7 +104,7 @@ namespace section_4_6_4
         ∀ t, ∃ n, n > t ∧ prime n
 
     def Fermat_prime (n : ℕ) : Prop :=
-        (∃ k, n = 2 ^ (2 ^ k)) ∧ prime n
+        (∃ (k : ℕ), n = 2 ^ (2 ^ k)) ∧ prime n
 
     def infinitely_many_Fermat_primes : Prop :=
         ∀ t, ∃ n, n > t ∧ Fermat_prime n
@@ -113,11 +113,11 @@ namespace section_4_6_4
         ∀ x, x > 2 → ∃ a b, prime a ∧ prime b ∧ x = a + b
 
     def Goldbach's_weak_conjecture : Prop :=
-        ∀ x, x > 5 → (¬ hide.even x)
+        ∀ x, x > 5 → (¬ hidden.even x)
         → ∃ a b c, prime a ∧ prime b ∧ prime c ∧ x = a + b + c
 
     def Fermat's_last_theorem : Prop := 
-        ¬ ∃ a b c n, n > 2 ∧ a ^ n + b ^ n = c ^ n
+        ¬ ∃ (a b c n : ℕ), n > 2 ∧ a ^ n + b ^ n = c ^ n
 
 end section_4_6_4
 
@@ -144,20 +144,15 @@ namespace section_4_6_5
             )
     example : (∃ x, p x ∨ q x) ↔ (∃ x, p x) ∨ (∃ x, q x) :=
         iff.intro
-            begin
-                intro ex,
-                exact (exists.elim ex
-                    (λ x pqx, 
-                        or.elim pqx 
-                            (λ px, 
-                                or.intro_left _
-                                    (exists.intro _ px))
-                            (λ qx, 
-                                or.intro_right _
-                                    (exists.intro _ qx))
-                            )
-                )
-            end
+            (assume ⟨ x, pqx ⟩,
+                or.elim pqx 
+                    (λ px,
+                        or.intro_left _
+                            (exists.intro _ px))
+                    (λ qx, 
+                        or.intro_right _
+                            (exists.intro _ qx))
+                    )
             (λ x, or.elim x
                 (λ ⟨ x , px ⟩, ⟨ x, or.intro_left _ px ⟩)
                 (λ ⟨ x , qx ⟩, ⟨ x, or.intro_right _ qx ⟩)
@@ -255,3 +250,75 @@ namespace section_4_6_6
         ... = log x + log y : log_exp_eq _
     
 end section_4_6_6
+
+
+namespace section_4_6_7
+    #check sub_self
+
+    example (x : ℤ) : x * 0 = 0 :=
+    calc
+        x * 0
+            = x * (0 - 0) : eq.refl _
+        ... = x * 0 - x * 0 : by rewrite mul_sub
+        ... = 0 : by rewrite sub_self
+
+end section_4_6_7
+
+namespace section_5_8
+  example (p q : Prop) (hp : p) (hq : q) : p ∧ q :=
+  begin
+    split;
+    assumption
+  end
+  example (p q : Prop) (hp : p) (hq : q) : p ∧ q ∧ p :=
+  begin
+    split;
+    try { split };
+    assumption
+  end
+
+  meta def search : tactic unit :=
+    (tactic.assumption <|> (tactic.left >> search) <|> (tactic.right >> search))
+
+  example (p q r : Prop) (hp : p) :
+    (p ∨ q ∨ r) ∧ (q ∨ p ∨ r) ∧ (q ∨ r ∨ p) :=
+    begin
+      repeat { split }; search
+    end
+end section_5_8
+
+namespace section_6
+section
+  variables x y : ℕ
+
+  def double := x + x
+
+  #check double y
+  #check double (2 * x)
+
+  theorem t1 : double (x + y) = double x + double y :=
+  by simp [double]
+
+  #check t1 y
+  #check t1 (2 * x)
+
+  theorem t2 : double (x * y) = double x * y :=
+  by simp [double, add_mul]
+end
+end section_6
+
+section
+
+  def t : Type := nat
+  def nat.dvd (m n : ℕ) : Prop := ∃ k, n = m * k
+
+  def has_dvd_t : has_dvd t := ⟨nat.dvd⟩
+
+  def f : t := (5 : nat)
+  local attribute [instance] has_dvd_t
+  def qq0 := f ∣ f
+
+end
+
+  def qq1 := f ∣ f
+  def zz := 1 ∣ 5
