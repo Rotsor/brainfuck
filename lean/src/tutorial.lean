@@ -315,10 +315,7 @@ section
   def has_dvd_t : has_dvd t := ⟨nat.dvd⟩
 
   def f : t := (5 : nat)
-  local attribute [instance] has_dvd_t
-  def qq0 := f ∣ f
 
 end
 
-  def qq1 := f ∣ f
-  def zz := 1 ∣ 5
+set_option pp.beta true
