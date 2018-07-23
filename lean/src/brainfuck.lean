@@ -97,7 +97,8 @@ end spare_tape_lang
 
 
 namespace simple_edsl
-  def program := list char
+ 
+  -- def program := list char
   def char_to_byte : char -> byte
   | '+' := 43
   | '-' := 45
@@ -109,13 +110,13 @@ namespace simple_edsl
   | ']' := 93
   | _ := 0
 
+
 /-
-  --
   -- sparse tape layout:
   -- 0. accumulator (we stand here)
   -- 1. helper
   -- 2. data
-  -- 3. program (0 at beginning of program and end of program, 1 etc are op. codes); is always to the left of data
+  -- 3. program (0 everywhere outside of program and after end of program, 1 etc are op. codes); is always to the left of data
   -- 4. instruction pointer (1 everywhere except one position where it's 0)
   -- 5. data pointer (0 everywhere except one position where it's 1)
   -- 6. stack (1 everywhere except:
@@ -127,6 +128,189 @@ namespace simple_edsl
   -- "+": ez
   -- "-": ez
   -- skip until ']':
+  -/
+
+
+open brainfuck.ast
+
+inductive direction : Type
+| forward : direction
+| backward : direction
+
+def direction.reverse : direction → direction
+| direction.forward := direction.backward
+| direction.backward := direction.forward
+
+namespace list
+  def replicate {A : Type} : nat → A → list A
+  | nat.zero x := []
+  | (nat.succ n) x := x :: replicate n x
+end list
+
+namespace simple_operations
+  def reset :=
+    [ instruction.loop [ instruction.minus ] ]
+end simple_operations
+
+open simple_operations
+
+namespace opcode
+
+  @[reducible]
+  def opcode := fin 10
+  def undefined : opcode := 0
+  def lparen : opcode := 1 
+  def rparen : opcode := 2
+  def minus : opcode := 3
+  def plus : opcode := 4
+  def left : opcode := 5
+  def right : opcode := 6
+  def print : opcode := 7
+  def ask : opcode := 8
+
+  def to_byte (x : opcode) : byte :=
+    fin.mk x.val (nat.le_trans x.is_lt dec_trivial)
+
+end opcode
+open opcode (opcode)
+
+namespace tape_layout
+  @[reducible]
+  def period := 10
+  @[reducible]
+  def slot := fin period
+  
+  def accumulator : slot := 0
+  def helper : slot := 9 -- very short-term storage
+  def register1 : slot := 1
+  def data : slot := 2
+  def code : slot := 3
+  def ip : slot := 4
+  def dp : slot := 5
+  def stack : slot := 6
+
+  def move (x : slot) :=
+    list.replicate x.val instruction.left
+
+  def unmove (x : slot) :=
+    list.replicate x.val instruction.right
+
+  def focus (x : slot) : program → program :=
+    λ p, move x ++ p ++ unmove x
+
+  def unfocus (x : slot) : program → program :=
+    λ p, unmove x ++ p ++ move x
+
+  def set (x : slot) (b : byte) : program :=
+    focus x (reset ++ list.replicate b.val instruction.plus)
+
+  def while (x : slot) (p : program) : program :=
+    focus x [ instruction.loop (unfocus x p) ]
+
+  def fin_zero {c : nat} : fin (c + 1) :=
+    { val := 0, is_lt := nat.zero_lt_succ c }
+
+  def remove_zero {A : Type} {c : nat} : (fin (c + 1) → A) → (fin c → A) :=
+    λ f c, f (fin.succ c)
+
+  -- start out focused on x
+  def match_worker
+    (todo : slot) (x : slot)
+    : ∀ (c : nat) (branch : fin (c + 1) → program), program
+    | nat.zero branch :=
+      unfocus x (branch fin_zero ++ set todo 0)
+    | (nat.succ c) branch :=
+      [ instruction.loop
+         (
+           instruction.minus
+           :: match_worker c (remove_zero branch)
+           ++ unfocus x (focus todo [
+             instruction.loop (
+               instruction.minus ::
+               unfocus todo (branch fin_zero)
+             )
+           ])
+         )
+      ]
+
+  def match_
+    (todo : slot) (x : slot)
+    (c : nat) (branch : fin (c + 1) → program): program
+    :=
+    set todo 1
+    ++ focus x (match_worker todo x c branch)
+
+  def if_before_last {A : Type} (true : A) (false : A) :
+    ∀ (c : nat) (f : fin (c + 2)), A
+  | (nat.succ x) ⟨ nat.zero, _ ⟩ := false
+  | nat.zero ⟨ nat.zero, _ ⟩ := true
+  | nat.zero ⟨ nat.succ nat.zero, lt ⟩ := false
+  | (nat.succ x) ⟨ (nat.succ y), lt ⟩ :=
+    if_before_last x ⟨ y, nat.le_of_succ_le_succ lt ⟩
+  | nat.zero ⟨ nat.succ (nat.succ _), lt ⟩ :=
+    begin
+     have qq := nat.not_succ_le_zero _ (nat.le_of_succ_le_succ (nat.le_of_succ_le_succ lt)),
+     contradiction
+    end
+
+  def if_ (x : slot) (v : byte) (true : program) (false : program) :=
+    match_ helper x (v.val + 1) (λ f, if_before_last true false _ f)
+
+  def advance_raw : direction → program
+  | direction.forward := list.replicate period instruction.right
+  | direction.backward := list.replicate period instruction.left
+
+  def advance (slots_to_copy : list slot) (d : direction) :=
+    let copy : slot → program :=
+      λ s,
+        advance_raw d
+        ++ focus s reset
+        ++ (advance_raw (direction.reverse d))
+        ++ while s (
+          [ instruction.minus ]
+          ++ advance_raw d
+          ++ [ instruction.plus ]
+          ++ advance_raw (direction.reverse d)
+        )
+    in
+    list.join (list.map copy slots_to_copy)
+    ++ advance_raw d
+
+end tape_layout
+
+open tape_layout
+
+namespace blergh
+
+  def find_paren (d : direction) : program :=
+     let open_paren : opcode :=
+       (match d with | direction.forward := opcode.lparen | direction.backward := opcode.rparen end)
+     in
+     let close_paren : opcode :=
+       (match d with | direction.forward := opcode.rparen | direction.backward := opcode.lparen end)
+     in
+     let todo : slot := register1 in
+     (set stack 2 ++
+     set register1 1 ++
+     while todo (
+       (if_ code (opcode.to_byte open_paren)
+         (set stack 0)
+         (if_ code (opcode.to_byte close_paren)
+          (set stack 0 ++
+           advance [] (direction.reverse d)
+           ++ while stack (
+             advance [] (direction.reverse d)
+           )
+          )
+          []
+         ))
+         ++
+         advance
+     ))
+
+end blergh
+
+/-
 
   *stack = 2;
   while(todo) {
