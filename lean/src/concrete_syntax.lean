@@ -433,7 +433,8 @@ namespace brainfuck
     | ._ s (p1, right_side_context.top_level) parsed_char.lparen w :=
       option.none
 
-    def unstep0 : 
+/-
+   def unstep0 : 
       ∀ (s : string) p,
       program_suffix_parsing_derivation s p
       → (∃ c parsed_c p' w', step0 c s p' parsed_c w' = option.some p)
@@ -451,7 +452,8 @@ namespace brainfuck
             induction instruction_or_comment,
           end
           sorry -- right_paren
-          sorry -- left_paren 
+          sorry -- left_paren
+          -/
         
 /-    | c parsed_c s p 
       (program_suffix_parsing_derivation.program _ _ _ (p'_fst, p'_snd) (program_parsing_derivation.empty) w) :=
@@ -513,7 +515,7 @@ namespace brainfuck
       → program_suffix_parsing_derivation (s1 ++ [rparen]) (c1, p0 ++ [ast.instruction.loop p1])
 -/
 
-    def step :
+/-    def step :
       ∀ (c : byte) (s : string) (p : right_side_zipper), parsed_char c → 
       program_suffix_parsing_derivation s p → 
       or_error (subtype (λ (p2 : right_side_zipper), program_suffix_parsing_derivation (c :: s) p2))
@@ -545,9 +547,9 @@ namespace brainfuck
         property :=
           program_suffix_parsing_derivation.cons
             (instruction_or_comment_parsing_derivation.comment b non_special) w
-      })
+      }) -/
 
-    def parse_as_suffix (s : string) : 
+/-    def parse_as_suffix (s : string) : 
       or_error (subtype (λ (p : right_side_zipper), program_suffix_parsing_derivation s p))
       := 
       list.rec_on s
@@ -564,8 +566,9 @@ namespace brainfuck
               step c s parsed.val (parse_char c) parsed.property
             )
         )
+        -/
 
-    def no_unclosed_parens : 
+/-    def no_unclosed_parens : 
       ∀ {s},
       (subtype (λ (p : right_side_zipper), program_suffix_parsing_derivation s p))
       → or_error (
@@ -585,7 +588,7 @@ namespace brainfuck
       or_error.rec_on
         (parse_as_suffix s)
         sorry
-        (λ res, no_unclosed_parens res)
+        (λ res, no_unclosed_parens res)-/
 
   end concrete_syntax
 end brainfuck

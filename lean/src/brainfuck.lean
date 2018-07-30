@@ -1,6 +1,9 @@
 import .byte
 import .unix
 import .ast
+import system.io
+import .interpreter
+import .concrete_syntax
 open byte
 
 universes u v
@@ -83,18 +86,8 @@ namespace spare_tape_lang
 
   /- def implements_relation (p : program) : (state → state → Prop) → Prop
     := λ R → ∀ s1 s2, R s1 s2 → ∃ trace p s1 s2 -/
-  
 
 end spare_tape_lang
-
-/-def paren_matcher
-  (tape : Type)
-  (accumulator : tape)
-  (looking_at : tape)
-  (is_left_paren : spare_tape_lang.program tape) -- program that puts 1
-  := -/
-
-
 
 namespace simple_edsl
  
@@ -109,27 +102,6 @@ namespace simple_edsl
   | '[' := 91
   | ']' := 93
   | _ := 0
-
-
-/-
-  -- sparse tape layout:
-  -- 0. accumulator (we stand here)
-  -- 1. helper
-  -- 2. data
-  -- 3. program (0 everywhere outside of program and after end of program, 1 etc are op. codes); is always to the left of data
-  -- 4. instruction pointer (1 everywhere except one position where it's 0)
-  -- 5. data pointer (0 everywhere except one position where it's 1)
-  -- 6. stack (1 everywhere except:
-           - 0 at all the brackets that we want to match; 2 at top-level such bracket
-           - 0 temorarily at the closing bracket we're matching)
-  --
-  -- "<": ez
-  -- ">": ez
-  -- "+": ez
-  -- "-": ez
-  -- skip until ']':
-  -/
-
 
 open brainfuck.ast
 
@@ -174,20 +146,35 @@ namespace opcode
 end opcode
 open opcode (opcode)
 
+/-
+  -- sparse tape layout:
+  -- - accumulator
+  -- - helper
+  -- - program: 0 everywhere outside of program and after end of program, 1 etc are op. codes
+  -- - instruction pointer: 2 to the left, 1 at the pointer, 0 to the right
+  -- - stack: 0 everywhere except:
+           - 1 at all the opening brackets that we want to match;
+           - 1 temorarily at the closing bracket we're matching)
+  -- - toplevel-bracket we're matching
+  -/
 namespace tape_layout
   @[reducible]
   def period := 10
   @[reducible]
   def slot := fin period
-  
-  def accumulator : slot := 0
-  def helper : slot := 9 -- very short-term storage
-  def register1 : slot := 1
-  def data : slot := 2
-  def code : slot := 3
-  def ip : slot := 4
-  def dp : slot := 5
-  def stack : slot := 6
+
+  def helper : slot := 0
+  def helper2 : slot := 1
+  def helper3 : slot := 2
+  def accumulator : slot := 3
+  def register1 : slot := 4
+  def data : slot := 5
+  -- data pointer: 2 to the left, 1 at the pointer, 0 to the right
+  def data_pointer : slot := 6
+  def code : slot := 7
+  def code_pointer : slot := 8
+  def stack : slot := 9
+  def top_of_stack : slot := 10
 
   def move (x : slot) :=
     list.replicate x.val instruction.left
@@ -233,7 +220,7 @@ namespace tape_layout
          )
       ]
 
-  def match_
+  def destructive_match_
     (todo : slot) (x : slot)
     (c : nat) (branch : fin (c + 1) → program): program
     :=
@@ -253,8 +240,44 @@ namespace tape_layout
      contradiction
     end
 
-  def if_ (x : slot) (v : byte) (true : program) (false : program) :=
-    match_ helper x (v.val + 1) (λ f, if_before_last true false _ f)
+  -- uses [helper]
+  def destructive_if_ (x : slot) (v : byte) (true : program) (false : program) :=
+    destructive_match_ helper x (v.val + 1) (λ f, if_before_last true false _ f)
+
+  def raw_move
+    (focus_from : program → program)
+    (unfocus_from : program → program)
+    (destinations : list (program → program)) : program
+    :=
+      list.join (list.map (λ (focus : program → program), focus reset) destinations)
+      ++ focus_from [ instruction.loop (
+        [ instruction.minus ] ++
+        unfocus_from (
+          list.join (list.map (λ (focus : program → program), focus [ instruction.plus ]) destinations)
+        )) ]
+
+  -- uses [helper]
+  def copy (from_ : slot) (to : slot) : program :=
+    raw_move (focus from_) (unfocus from_) [focus helper]
+    ++
+    raw_move (focus helper) (unfocus helper) ((focus from_) :: focus to :: [])
+
+  -- uses [helper] and [helper2]
+  -- the body may modify [x]
+  def if_ (x : slot) (v : byte) (true : program) (false : program) : program :=
+    copy x helper2
+    ++ destructive_if_ x v true false
+
+  def whileC (x : slot) (compute_cond : program) (p : program) : program :=
+    compute_cond
+    ++ focus x [ instruction.loop (unfocus x (p ++ compute_cond)) ]
+
+  -- uses all 3 helpers
+  def whileZ (x : slot) (p : program) : program :=
+    whileC helper3 (
+      if_ x 0
+        (focus helper3 (reset ++ [instruction.plus]))
+        (focus helper3 reset)) p
 
   def advance_raw : direction → program
   | direction.forward := list.replicate period instruction.right
@@ -282,6 +305,57 @@ open tape_layout
 
 namespace blergh
 
+  def parsed_char_to_opcode : ∀ {x : byte}, brainfuck.concrete_syntax.parsed_char x → opcode
+  | _ brainfuck.concrete_syntax.parsed_char.lparen := opcode.lparen
+  | _ brainfuck.concrete_syntax.parsed_char.rparen := opcode.rparen
+  | _ (brainfuck.concrete_syntax.parsed_char.simple_instruction _ brainfuck.ast.instruction.left _) := opcode.left
+  | _ (brainfuck.concrete_syntax.parsed_char.simple_instruction _ brainfuck.ast.instruction.right _) := opcode.right
+  | _ (brainfuck.concrete_syntax.parsed_char.simple_instruction _ brainfuck.ast.instruction.plus _) := opcode.plus
+  | _ (brainfuck.concrete_syntax.parsed_char.simple_instruction _ brainfuck.ast.instruction.minus _) := opcode.minus
+  | _ (brainfuck.concrete_syntax.parsed_char.simple_instruction _ brainfuck.ast.instruction.print _) := opcode.print
+  | _ (brainfuck.concrete_syntax.parsed_char.simple_instruction _ brainfuck.ast.instruction.ask _) := opcode.ask
+  | _ (brainfuck.concrete_syntax.parsed_char.simple_instruction _ (brainfuck.ast.instruction.loop _) wtf) :=
+    begin
+    have z : false := begin
+     cases wtf,
+     end,
+     contradiction
+    end
+  | _ (brainfuck.concrete_syntax.parsed_char.comment _ _) := opcode.undefined
+
+  def decode_instruction (x : fin 100) : opcode :=
+    parsed_char_to_opcode 
+      (brainfuck.concrete_syntax.parse_char
+        { val := x.val, is_lt := (nat.le_trans x.is_lt dec_trivial) })
+
+  -- read the program and initialize the initial state
+  def read_program : program :=
+    let todo := register1 in
+    (advance [] direction.forward) ++
+    set todo 1 ++
+    while todo (
+      set todo 1
+      ++ focus accumulator [ instruction.ask ]
+      ++ destructive_match_
+        helper accumulator 99
+         (λ x,
+          if x.val = 0
+          then
+            set todo 0
+          else
+            set code (opcode.to_byte (decode_instruction x)))
+      ++
+      if_ todo 0
+        []
+        (advance [] direction.forward))
+    ++ (advance [] direction.backward)
+    ++ while todo (advance [] direction.backward)
+    ++ set data_pointer 2
+    ++ set code_pointer 2
+    ++ (advance [] direction.forward)
+    ++ set data_pointer 1
+    ++ set code_pointer 1
+
   def find_paren (d : direction) : program :=
      let open_paren : opcode :=
        (match d with | direction.forward := opcode.lparen | direction.backward := opcode.rparen end)
@@ -290,112 +364,80 @@ namespace blergh
        (match d with | direction.forward := opcode.rparen | direction.backward := opcode.lparen end)
      in
      let todo : slot := register1 in
-     (set stack 2 ++
+     (
+     set stack 1 ++
+     set top_of_stack 1 ++
      set register1 1 ++
      while todo (
        (if_ code (opcode.to_byte open_paren)
-         (set stack 0)
+         (set stack 1)
          (if_ code (opcode.to_byte close_paren)
-          (set stack 0 ++
+          (set stack 1 ++
            advance [] (direction.reverse d)
-           ++ while stack (
-             advance [] (direction.reverse d)
-           )
+           ++ whileZ stack (
+             advance [] (direction.reverse d))
+           ++
+           if_ top_of_stack 0
+             (-- erase the two matching parens and continue
+               set stack 0
+               ++ whileZ stack (advance [] d)
+               ++ set stack 0)
+             (
+              -- erase the two matching parens and finish
+               set top_of_stack 0
+               ++ set stack 0
+               ++ whileZ stack (advance [] d)
+               ++ set stack 0
+               ++ set todo 0
+             )
           )
           []
          ))
          ++
-         advance
+         if_ todo 0 [] (advance [todo] d)
      ))
+
+  def src1 : list byte :=
+    10 :: 43 :: 45 :: 60 :: 62 :: 46 :: 44 :: []
+
+  def echo :=
+    set register1 1 ++
+    while register1 (
+      focus accumulator [ instruction.ask ]
+      ++ focus accumulator [ instruction.print ])
 
 end blergh
 
-/-
-
-  *stack = 2;
-  while(todo) {
-    if('[') {
-      *stack = 0;
-    }
-    else if(']') {
-      *stack = 0;
-      stack--;
-      while(*stack) {
-        stack--;
-      }
-      if(!*ip) {
-        *stack = 1;
-        stack++;
-        while(*stack) {
-          stack++;
-        }
-        *stack = 1;
-        todo = false;
-      } else {
-        *stack = 1;
-        stack++;
-        while(*stack) {
-          stack++;
-        }
-        *stack = 1;
-      }
-    }
-  advance();
-}
-
-        if(!*stack){
-        } else {
-          stack--;
-          
-        }
-      }
-    }
-
-  }
-   if()
-   
-  -- skip instruction:
-  -- if
-  -- "[": 
-  -- skip to after ']': 
-  -- while 
-  -- if ... then >[] find the matching 
-  --  
--/
-
-  def inner_big_case : Π (n : ℕ), (fin n -> program) → program
-  | nat.zero := λ _, []
-  | (nat.succ n) := λ f, []
-  -- def big_case (f : byte -> program) : program :=
-
-  -- def case (branches : (byte × program)) (default : program): program :=
-
-  def boo : program := [ '+' ]
-
-  def parsed1 := 
-    brainfuck.concrete_syntax.parse 
-      (list.map char_to_byte [ '[', '[', ']', ']' ])
-
-  def parsed2 := 
-    brainfuck.concrete_syntax.parse 
-      (list.map char_to_byte [ 'x' ])
-
-  def blah : brainfuck.concrete_syntax.or_error unit := brainfuck.concrete_syntax.or_error.ok ()
-  def qqq : option int := some 3
-  #eval parsed1
-  #eval parsed2
-  #eval blah
-  
-  #print boo
-  -- for a given closing paren, find the matching opening paren
-  -- requirements: 
-  -- - null byte before program
-  -- - comments stripped
-  --
-  -- keep going left
-  -- replace
-  --[
-  --  case of
-  --  | ']' ->
-  --]
 end simple_edsl
+
+meta def char_to_byte (c : char) : byte :=
+  if h : c.val < 256 then { val := c.val, is_lt := h }
+  else 0
+
+def byte_to_char (b : byte) : char :=
+  { val := b.val,
+  valid := begin refine (is_valid_char_range_1 b.val _),
+  exact ((nat.le_trans b.is_lt dec_trivial))end }
+
+meta def get_byte : io byte :=
+  io.stdin >>= λ stdin,
+  io.fs.get_char stdin >>= λ c,
+  return (char_to_byte c)
+
+meta def run : unix.with_coinduction.process → io unit :=
+  λ x,
+   let r s :=
+     run { state := x.state, initial_state := s, transition := x.transition }
+   in
+   match x.transition x.initial_state with
+   | unix.with_coinduction.step_result.step s :=
+     r s
+   | unix.with_coinduction.step_result.ask f :=
+     get_byte >>=
+     λ c, r (f c)
+   | unix.with_coinduction.step_result.print (c, s) :=
+     io.stdout >>= λ stdout,
+     io.fs.put_char stdout (byte_to_char c) >>= (λ _, r s)
+   end
+
+meta def main := run (brainfuck.interpreter.interpret [])
